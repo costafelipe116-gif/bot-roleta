@@ -1,4 +1,0 @@
-pyTelegramBotAPI
-playwright
-beautifulsoup4
-requests
