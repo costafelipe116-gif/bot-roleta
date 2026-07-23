@@ -7,26 +7,25 @@ from pathlib import Path
 from datetime import datetime
 
 # ==========================================================
-# CONFIGURAÇÕES E CREDENCIAIS
+# CONFIGURAÇÕES
 # ==========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8675857127:AAFvZAqEJhu5UJPY6v8t7Y3GTQJTxgI788g")
 CHAT_ID = os.getenv("CHAT_ID", "5912926190")
-
 FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY") or os.getenv("FOOTBALL_API_KEY", "db1b4be93bda49ab9f05fa9e20b994c1")
 
-INTERVALO = 60  # Varredura a cada 60 segundos
+INTERVALO = 60
 ARQUIVO_HISTORICO = "historico.json"
-CACHE_MINUTOS = 3600  # Memória anti-spam de 1 hora
+CACHE_MINUTOS = 3600
+
+# 🔴 COLOQUE True PARA TESTAR O TELEGRAM AGORA (Mesmo sem jogos ao vivo)
+# 🟢 COLOQUE False QUANDO QUISER DEIXAR RODANDO OFICIALMENTE
+MODO_TESTE = True 
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-
-# ==========================================================
-# CACHE ANTI-SPAM
-# ==========================================================
 
 alertas = {}
 
@@ -38,48 +37,6 @@ def alerta_enviado(chave):
     alertas[chave] = agora
     return False
 
-def limpar_cache():
-    agora = time.time()
-    remover = [chave for chave, instante in alertas.items() if agora - instante > CACHE_MINUTOS]
-    for chave in remover:
-        del alertas[chave]
-
-# ==========================================================
-# HISTÓRICO EM JSON
-# ==========================================================
-
-def carregar_historico():
-    if not Path(ARQUIVO_HISTORICO).exists():
-        return []
-    try:
-        with open(ARQUIVO_HISTORICO, "r", encoding="utf8") as f:
-            return json.load(f)
-    except:
-        return []
-
-def salvar_historico(dados):
-    try:
-        with open(ARQUIVO_HISTORICO, "w", encoding="utf8") as f:
-            json.dump(dados, f, indent=4, ensure_ascii=False)
-    except Exception as erro:
-        logging.error(f"Erro ao salvar histórico: {erro}")
-
-def registrar_sinal(casa, fora, estrategia, minuto, placar):
-    historico = carregar_historico()
-    historico.append({
-        "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "casa": casa,
-        "fora": fora,
-        "estrategia": estrategia,
-        "minuto": minuto,
-        "placar": placar
-    })
-    salvar_historico(historico)
-
-# ==========================================================
-# ENVIAR MENSAGEM NO TELEGRAM
-# ==========================================================
-
 def enviar_telegram(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -90,32 +47,34 @@ def enviar_telegram(texto):
     try:
         r = requests.post(url, json=payload, timeout=20)
         if r.status_code == 200:
-            logging.info("✅ Alerta enviado ao Telegram!")
+            logging.info("✅ Mensagem enviada com sucesso ao Telegram!")
         else:
             logging.error(f"❌ Erro Telegram ({r.status_code}): {r.text}")
     except Exception as erro:
         logging.error(f"❌ Exceção Telegram: {erro}")
 
-# ==========================================================
-# BUSCAR JOGOS AO VIVO
-# ==========================================================
-
 def buscar_jogos():
     url = "https://api.football-data.org/v4/matches"
     headers = {"X-Auth-Token": FOOTBALL_DATA_KEY}
-    params = {"status": "IN_PLAY"}
+    
+    # Se MODO_TESTE for True, busca jogos agendados ou finalizados para testar
+    params = {"status": "SCHEDULED,FINISHED"} if MODO_TESTE else {"status": "IN_PLAY"}
 
     try:
         resposta = requests.get(url, headers=headers, params=params, timeout=20)
-        if resposta.status_code != 200:
-            logging.error(f"⚠️ Erro API Football Data ({resposta.status_code}): {resposta.text}")
+        
+        if resposta.status_code == 403:
+            logging.error("❌ Erro 403: Chave da API inválida ou sem acesso a esta liga.")
+            return []
+        elif resposta.status_code != 200:
+            logging.error(f"⚠️ Erro API ({resposta.status_code}): {resposta.text}")
             return []
 
         partidas = resposta.json().get("matches", [])
         jogos = []
 
-        for jogo in partidas:
-            minuto = jogo.get("minute") or 0
+        for jogo in partidas[:5]:  # Pega os primeiros 5 jogos para teste
+            minuto = jogo.get("minute") or 30  # Simula 30 min se for teste
             casa = jogo.get("homeTeam", {}).get("name", "Casa")
             fora = jogo.get("awayTeam", {}).get("name", "Fora")
             
@@ -136,21 +95,17 @@ def buscar_jogos():
         return jogos
 
     except Exception as erro:
-        logging.error(f"❌ Erro de conexão: {erro}")
+        logging.error(f"❌ Erro de conexão com a API: {erro}")
         return []
-
-# ==========================================================
-# ANALISAR ESTRATÉGIAS REAIS
-# ==========================================================
 
 def analisar_jogos():
     jogos = buscar_jogos()
 
     if not jogos:
-        logging.info("📊 Nenhum jogo ao vivo nas ligas monitoradas no momento.")
+        logging.info("📊 Nenhum jogo ao vivo nas 12 ligas grátis no momento.")
         return
 
-    logging.info(f"🔎 {len(jogos)} jogo(s) ao vivo sendo analisado(s)...")
+    logging.info(f"🔎 {len(jogos)} jogo(s) encontrado(s) para análise.")
 
     for jogo in jogos:
         try:
@@ -162,19 +117,17 @@ def analisar_jogos():
             gols_fora = jogo["gols_fora"]
             liga = jogo["liga"]
 
-            estrategia = None
-
-            # 🎯 1. Pressão Over 0.5 HT (0x0 entre 25' e 40' min)
-            if 25 <= minuto <= 40 and gols_casa == 0 and gols_fora == 0:
-                estrategia = "⚽ Over 0.5 HT (Gol no 1º Tempo)"
-
-            # 🎯 2. Reação / Virada no 2º Tempo (Casa perdendo por 1 gol após os 50' min)
-            elif minuto >= 50 and (gols_fora - gols_casa == 1):
-                estrategia = "🔥 Pressão Mandante (Buscando Empate/Virada)"
-
-            # 🎯 3. Gol no Final / Over Limite (Jogo empatado ou 1 gol de dif. após 80' min)
-            elif minuto >= 80 and abs(gols_casa - gols_fora) <= 1:
-                estrategia = "🚩 Pressão Final (Over Limite / Cantos Finais)"
+            # Em MODO_TESTE dispara um alerta genérico de teste
+            if MODO_TESTE:
+                estrategia = "🧪 MODO DE TESTE (Verificação de Bot)"
+            else:
+                estrategia = None
+                if 25 <= minuto <= 40 and gols_casa == 0 and gols_fora == 0:
+                    estrategia = "⚽ Over 0.5 HT (Gol no 1º Tempo)"
+                elif minuto >= 50 and (gols_fora - gols_casa == 1):
+                    estrategia = "🔥 Pressão Mandante (Buscando Empate)"
+                elif minuto >= 80 and abs(gols_casa - gols_fora) <= 1:
+                    estrategia = "🚩 Pressão Final (Over Limite)"
 
             if estrategia is None:
                 continue
@@ -196,22 +149,16 @@ def analisar_jogos():
 💡 *Confira a cotação na sua casa de apostas!*"""
 
             enviar_telegram(mensagem)
-            registrar_sinal(casa, fora, estrategia, minuto, f"{gols_casa}x{gols_fora}")
 
         except Exception as erro:
-            logging.error(f"❌ Erro ao processar partida {jogo.get('casa')}: {erro}")
-
-# ==========================================================
-# LOOP PRINCIPAL
-# ==========================================================
+            logging.error(f"❌ Erro ao analisar jogo: {erro}")
 
 if __name__ == "__main__":
     logging.info("🤖 Robô de Sinal Iniciado!")
-    enviar_telegram("🤖 *Robô Atualizado e Online!* Monitorando partidas ao vivo com estratégias de placar e tempo.")
+    enviar_telegram("🤖 *Robô Atualizado!* Monitorando com logs detalhados.")
 
     while True:
         try:
-            limpar_cache()
             analisar_jogos()
         except Exception as erro:
             logging.error(f"❌ Erro no loop: {erro}")
