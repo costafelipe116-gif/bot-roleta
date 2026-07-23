@@ -3,23 +3,23 @@ import time
 import requests
 
 # ==========================================================
-# 1. SUAS CONFIGURAÇÕES (100% PREENCHIDAS)
+# 1. SUAS CONFIGURAÇÕES E CHAVES OFICIAIS (PREENCHIDAS)
 # ==========================================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8675857127:AAFvZAqEJhu5UJPY6v8t7Y3GTQJTxgI788g")
 CHAT_ID = os.getenv("CHAT_ID", "5912926190")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "d27dcfd9551863e11be6453b75d9b6f1")
 
-# Filtros do bot
+# Filtros do Bot
 ODD_MINIMA = 1.50
 ODD_MAXIMA = 2.00
-INTERVALO_VERIFICACAO = 60  # Tempo em segundos entre cada checagem
+INTERVALO_VERIFICACAO = 40  # Verifica novos jogos a cada 40 segundos
 
-# Guardar os alertas já enviados para não repeti-los (evita spam)
+# Guardar alertas enviados para evitar spam de mensagens repetidas
 jogos_alertados = set()
 
 
 # ==========================================================
-# 2. FUNÇÃO QUE ENVIA A MENSAGEM PARA O TELEGRAM
+# 2. FUNÇÃO PARA DISPARAR ALERTA NO TELEGRAM
 # ==========================================================
 def enviar_alerta_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -31,24 +31,24 @@ def enviar_alerta_telegram(mensagem):
     try:
         resposta = requests.post(url, json=payload)
         if resposta.status_code == 200:
-            print("✅ Alerta enviado com sucesso no Telegram!")
+            print("✅ Alerta ao vivo enviado com sucesso no Telegram!")
         else:
-            print(f"❌ Erro ao enviar no Telegram: {resposta.text}")
+            print(f"❌ Erro no Telegram ({resposta.status_code}): {resposta.text}")
     except Exception as e:
-        print(f"❌ Falha de conexão ao enviar mensagem: {e}")
+        print(f"❌ Erro de conexão ao enviar no Telegram: {e}")
 
 
 # ==========================================================
-# 3. FUNÇÃO QUE BUSCA OS JOGOS E FILTRA AS ODDS
+# 3. ANALISADOR DE OPORTUNIDADES AO VIVO
 # ==========================================================
-def verificar_jogos_e_odds():
-    print("🔍 Analisando odds no mercado de futebol...")
+def analisar_jogos_ao_vivo():
+    print("⚡ Buscando oportunidades AO VIVO no mercado de futebol...")
     
     url = "https://api.the-odds-api.com/v4/sports/upcoming/odds/"
     params = {
         "apiKey": ODDS_API_KEY,
-        "regions": "eu,us",         # Regiões das casas de apostas
-        "markets": "h2h,totals",    # Mercados: Vencedor e Gols
+        "regions": "eu,us",
+        "markets": "h2h,totals",
         "oddsFormat": "decimal"
     }
 
@@ -56,7 +56,7 @@ def verificar_jogos_e_odds():
         resposta = requests.get(url, params=params)
         
         if resposta.status_code != 200:
-            print(f"⚠️ Erro na API de Odds (Código {resposta.status_code}): {resposta.text}")
+            print(f"⚠️ Erro na API de Odds ({resposta.status_code}): {resposta.text}")
             return
 
         jogos = resposta.json()
@@ -75,37 +75,39 @@ def verificar_jogos_e_odds():
                 nome_casa = casa.get("title", "Casa de Apostas")
                 
                 for mercado in casa.get("markets", []):
+                    tipo_mercado = mercado.get("key", "")
+                    
                     for aposta in mercado.get("outcomes", []):
                         nome_opcao = aposta.get("name")
                         odd_atual = aposta.get("price", 0)
 
-                        # FILTRO: Verifica se a Odd está no intervalo (1.50 a 2.00)
+                        # FILTRO DE ODD AO VIVO (Entre 1.50 e 2.00)
                         if ODD_MINIMA <= odd_atual <= ODD_MAXIMA:
-                            id_alerta = f"{id_jogo}_{nome_opcao}_{odd_atual}"
+                            id_alerta = f"{id_jogo}_{tipo_mercado}_{nome_opcao}_{odd_atual}"
 
                             if id_alerta not in jogos_alertados:
                                 mensagem = (
-                                    "🚨 **ALERTA DE ENTRADA DETECTADO!** 🚨\n\n"
+                                    "🚨 **OPORTUNIDADE AO VIVO DETECTADA!** 🚨\n\n"
                                     f"⚽ **Jogo:** {time_casa} x {time_fora}\n"
                                     f"🏢 **Casa:** {nome_casa}\n"
-                                    f"🎯 **Mercado/Opção:** {nome_opcao}\n"
+                                    f"🎯 **Mercado/Entrada:** {nome_opcao}\n"
                                     f"📈 **Odd Atual:** {odd_atual:.2f}\n\n"
-                                    "💡 *Acesse a casa de apostas para realizar sua entrada!*"
+                                    "💡 *Confira o momento do jogo na sua casa de apostas e realize a entrada!*"
                                 )
                                 
                                 enviar_alerta_telegram(mensagem)
                                 jogos_alertados.add(id_alerta)
 
     except Exception as e:
-        print(f"❌ Erro no processamento dos dados: {e}")
+        print(f"❌ Erro ao analisar jogos ao vivo: {e}")
 
 
 # ==========================================================
-# 4. EXECUÇÃO CONTÍNUA DO BOT
+# 4. EXECUÇÃO CONTINUA
 # ==========================================================
 if __name__ == "__main__":
-    print("🚀 Bot de Sinais iniciado com sucesso!")
+    print("🚀 Bot de Sinais AO VIVO Iniciado!")
     
     while True:
-        verificar_jogos_e_odds()
+        analisar_jogos_ao_vivo()
         time.sleep(INTERVALO_VERIFICACAO)
