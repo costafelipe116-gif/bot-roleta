@@ -7,25 +7,26 @@ from pathlib import Path
 from datetime import datetime
 
 # ==========================================================
-# CONFIGURAÇÕES
+# CONFIGURAÇÕES E CREDENCIAIS
 # ==========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8675857127:AAFvZAqEJhu5UJPY6v8t7Y3GTQJTxgI788g")
 CHAT_ID = os.getenv("CHAT_ID", "5912926190")
+
 FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY") or os.getenv("FOOTBALL_API_KEY", "db1b4be93bda49ab9f05fa9e20b994c1")
 
-INTERVALO = 60
+INTERVALO = 60  # Varredura a cada 1 minuto
 ARQUIVO_HISTORICO = "historico.json"
-CACHE_MINUTOS = 3600
-
-# 🔴 COLOQUE True PARA TESTAR O TELEGRAM AGORA (Mesmo sem jogos ao vivo)
-# 🟢 COLOQUE False QUANDO QUISER DEIXAR RODANDO OFICIALMENTE
-MODO_TESTE = True 
+CACHE_MINUTOS = 3600  # Memória anti-spam de 1 hora por jogo
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
+
+# ==========================================================
+# MEMÓRIA ANTI-SPAM
+# ==========================================================
 
 alertas = {}
 
@@ -37,6 +38,16 @@ def alerta_enviado(chave):
     alertas[chave] = agora
     return False
 
+def limpar_cache():
+    agora = time.time()
+    remover = [chave for chave, instante in alertas.items() if agora - instante > CACHE_MINUTOS]
+    for chave in remover:
+        del alertas[chave]
+
+# ==========================================================
+# DISPARO PARA O TELEGRAM
+# ==========================================================
+
 def enviar_telegram(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -47,34 +58,32 @@ def enviar_telegram(texto):
     try:
         r = requests.post(url, json=payload, timeout=20)
         if r.status_code == 200:
-            logging.info("✅ Mensagem enviada com sucesso ao Telegram!")
+            logging.info("✅ Sinal enviado para o Telegram!")
         else:
             logging.error(f"❌ Erro Telegram ({r.status_code}): {r.text}")
     except Exception as erro:
         logging.error(f"❌ Exceção Telegram: {erro}")
 
+# ==========================================================
+# BUSCAR JOGOS AO VIVO
+# ==========================================================
+
 def buscar_jogos():
     url = "https://api.football-data.org/v4/matches"
     headers = {"X-Auth-Token": FOOTBALL_DATA_KEY}
-    
-    # Se MODO_TESTE for True, busca jogos agendados ou finalizados para testar
-    params = {"status": "SCHEDULED,FINISHED"} if MODO_TESTE else {"status": "IN_PLAY"}
+    params = {"status": "IN_PLAY"}
 
     try:
         resposta = requests.get(url, headers=headers, params=params, timeout=20)
-        
-        if resposta.status_code == 403:
-            logging.error("❌ Erro 403: Chave da API inválida ou sem acesso a esta liga.")
-            return []
-        elif resposta.status_code != 200:
-            logging.error(f"⚠️ Erro API ({resposta.status_code}): {resposta.text}")
+        if resposta.status_code != 200:
+            logging.error(f"⚠️ API Error ({resposta.status_code}): {resposta.text}")
             return []
 
         partidas = resposta.json().get("matches", [])
         jogos = []
 
-        for jogo in partidas[:5]:  # Pega os primeiros 5 jogos para teste
-            minuto = jogo.get("minute") or 30  # Simula 30 min se for teste
+        for jogo in partidas:
+            minuto = jogo.get("minute") or 0
             casa = jogo.get("homeTeam", {}).get("name", "Casa")
             fora = jogo.get("awayTeam", {}).get("name", "Fora")
             
@@ -95,17 +104,21 @@ def buscar_jogos():
         return jogos
 
     except Exception as erro:
-        logging.error(f"❌ Erro de conexão com a API: {erro}")
+        logging.error(f"❌ Erro na busca de partidas: {erro}")
         return []
+
+# ==========================================================
+# ANÁLISE DE ESTRATÉGIA ÚNICA (0x0 NO 2º TEMPO)
+# ==========================================================
 
 def analisar_jogos():
     jogos = buscar_jogos()
 
     if not jogos:
-        logging.info("📊 Nenhum jogo ao vivo nas 12 ligas grátis no momento.")
+        logging.info("📊 Varrendo partidas ao vivo... (Nenhum jogo no momento)")
         return
 
-    logging.info(f"🔎 {len(jogos)} jogo(s) encontrado(s) para análise.")
+    logging.info(f"🔎 Analisando {len(jogos)} jogo(s) ao vivo...")
 
     for jogo in jogos:
         try:
@@ -117,48 +130,43 @@ def analisar_jogos():
             gols_fora = jogo["gols_fora"]
             liga = jogo["liga"]
 
-            # Em MODO_TESTE dispara um alerta genérico de teste
-            if MODO_TESTE:
-                estrategia = "🧪 MODO DE TESTE (Verificação de Bot)"
-            else:
-                estrategia = None
-                if 25 <= minuto <= 40 and gols_casa == 0 and gols_fora == 0:
-                    estrategia = "⚽ Over 0.5 HT (Gol no 1º Tempo)"
-                elif minuto >= 50 and (gols_fora - gols_casa == 1):
-                    estrategia = "🔥 Pressão Mandante (Buscando Empate)"
-                elif minuto >= 80 and abs(gols_casa - gols_fora) <= 1:
-                    estrategia = "🚩 Pressão Final (Over Limite)"
+            # 🎯 REGRA ÚNICA: 2º Tempo (entre 50' e 75' min) e Placar 0 x 0
+            if 50 <= minuto <= 75 and gols_casa == 0 and gols_fora == 0:
+                
+                chave = f"{fixture_id}-over05-2ht"
 
-            if estrategia is None:
-                continue
+                if alerta_enviado(chave):
+                    continue
 
-            chave = f"{fixture_id}-{estrategia}"
-
-            if alerta_enviado(chave):
-                continue
-
-            mensagem = f"""🎯 *OPORTUNIDADE DETECTADA*
+                mensagem = f"""🔥 *SINAL DETECTADO: OVER 0.5 GOLS*
 
 🏆 *{casa} x {fora}*
 🏆 *Liga:* {liga}
-⏱️ *Minuto:* {minuto}'
-⚽ *Placar:* {gols_casa} x {gols_fora}
+⏱️ *Minuto:* {minuto}' do 2º Tempo
+⚽ *Placar Atual:* 0 x 0
 
-📊 *Estratégia:* {estrategia}
+📈 *Entrada Recomendada:* Over 0.5 Gols (Gol no jogo)
+💰 *Odd Estimada:* ~1.50 a 1.70
 
-💡 *Confira a cotação na sua casa de apostas!*"""
+💡 *O jogo está no 2º tempo com placar zerado. Excelente momento para buscar 1 gol!*"""
 
-            enviar_telegram(mensagem)
+                enviar_telegram(mensagem)
+                logging.info(f"🚀 Alerta enviado: {casa} x {fora} [{minuto}']")
 
         except Exception as erro:
-            logging.error(f"❌ Erro ao analisar jogo: {erro}")
+            logging.error(f"❌ Erro ao analisar partida {jogo.get('casa')}: {erro}")
+
+# ==========================================================
+# LOOP PRINCIPAL
+# ==========================================================
 
 if __name__ == "__main__":
-    logging.info("🤖 Robô de Sinal Iniciado!")
-    enviar_telegram("🤖 *Robô Atualizado!* Monitorando com logs detalhados.")
+    logging.info("🤖 Bot de Sinal Over 0.5 2HT Iniciado!")
+    enviar_telegram("🤖 *Bot Atualizado!* Focado exclusivamente em jogos 0x0 no 2º Tempo (Odd 1.50+).")
 
     while True:
         try:
+            limpar_cache()
             analisar_jogos()
         except Exception as erro:
             logging.error(f"❌ Erro no loop: {erro}")
