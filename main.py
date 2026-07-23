@@ -15,7 +15,7 @@ CHAT_ID = os.getenv("CHAT_ID", "5912926190")
 
 FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY") or os.getenv("FOOTBALL_API_KEY", "db1b4be93bda49ab9f05fa9e20b994c1")
 
-INTERVALO = 60  # Tempo entre varreduras em segundos
+INTERVALO = 60  # Varredura a cada 60 segundos
 ARQUIVO_HISTORICO = "historico.json"
 CACHE_MINUTOS = 3600  # Memória anti-spam de 1 hora
 
@@ -25,7 +25,7 @@ logging.basicConfig(
 )
 
 # ==========================================================
-# MEMÓRIA ANTI-SPAM (CACHE)
+# CACHE ANTI-SPAM
 # ==========================================================
 
 alertas = {}
@@ -45,7 +45,7 @@ def limpar_cache():
         del alertas[chave]
 
 # ==========================================================
-# HISTÓRICO DE SINAIS (JSON)
+# HISTÓRICO EM JSON
 # ==========================================================
 
 def carregar_historico():
@@ -54,8 +54,7 @@ def carregar_historico():
     try:
         with open(ARQUIVO_HISTORICO, "r", encoding="utf8") as f:
             return json.load(f)
-    except Exception as erro:
-        logging.error(f"Erro ao carregar histórico: {erro}")
+    except:
         return []
 
 def salvar_historico(dados):
@@ -65,23 +64,20 @@ def salvar_historico(dados):
     except Exception as erro:
         logging.error(f"Erro ao salvar histórico: {erro}")
 
-def registrar_sinal(casa, fora, estrategia, minuto, placar, confianca):
+def registrar_sinal(casa, fora, estrategia, minuto, placar):
     historico = carregar_historico()
-    novo_registro = {
+    historico.append({
         "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
         "casa": casa,
         "fora": fora,
         "estrategia": estrategia,
         "minuto": minuto,
-        "placar": placar,
-        "confianca": confianca,
-        "resultado": "PENDENTE"
-    }
-    historico.append(novo_registro)
+        "placar": placar
+    })
     salvar_historico(historico)
 
 # ==========================================================
-# DISPARO PARA O TELEGRAM
+# ENVIAR MENSAGEM NO TELEGRAM
 # ==========================================================
 
 def enviar_telegram(texto):
@@ -94,14 +90,14 @@ def enviar_telegram(texto):
     try:
         r = requests.post(url, json=payload, timeout=20)
         if r.status_code == 200:
-            logging.info("✅ Mensagem enviada com sucesso ao Telegram.")
+            logging.info("✅ Alerta enviado ao Telegram!")
         else:
             logging.error(f"❌ Erro Telegram ({r.status_code}): {r.text}")
     except Exception as erro:
-        logging.error(f"❌ Exceção no envio do Telegram: {erro}")
+        logging.error(f"❌ Exceção Telegram: {erro}")
 
 # ==========================================================
-# BUSCA DE JOGOS AO VIVO (FOOTBALL-DATA.ORG)
+# BUSCAR JOGOS AO VIVO
 # ==========================================================
 
 def buscar_jogos():
@@ -112,14 +108,14 @@ def buscar_jogos():
     try:
         resposta = requests.get(url, headers=headers, params=params, timeout=20)
         if resposta.status_code != 200:
-            logging.error(f"⚠️ Football Data API Erro ({resposta.status_code}): {resposta.text}")
+            logging.error(f"⚠️ Erro API Football Data ({resposta.status_code}): {resposta.text}")
             return []
 
         partidas = resposta.json().get("matches", [])
         jogos = []
 
         for jogo in partidas:
-            minuto = jogo.get("minute", 0) or 0
+            minuto = jogo.get("minute") or 0
             casa = jogo.get("homeTeam", {}).get("name", "Casa")
             fora = jogo.get("awayTeam", {}).get("name", "Fora")
             
@@ -134,84 +130,27 @@ def buscar_jogos():
                 "minuto": minuto,
                 "gols_casa": gols_casa,
                 "gols_fora": gols_fora,
-                "competicao": jogo.get("competition", {}).get("name", "Geral")
+                "liga": jogo.get("competition", {}).get("name", "Liga")
             })
 
         return jogos
 
     except Exception as erro:
-        logging.error(f"❌ Erro de conexão com a API de Futebol: {erro}")
+        logging.error(f"❌ Erro de conexão: {erro}")
         return []
 
-# Safe fallback/módulo estatístico
-def buscar_estatisticas(fixture_id, minuto):
-    # Simulação/Estimativa de pressão com base no tempo de jogo
-    # para APIs gratuitas que não entregam contagem de escanteios em tempo real.
-    est_escanteios = max(1, int(minuto / 12))
-    est_finalizacoes = max(2, int(minuto / 6))
-    est_finalizacoes_gol = max(1, int(minuto / 15))
-
-    return {
-        "escanteios": est_escanteios,
-        "finalizacoes": est_finalizacoes,
-        "finalizacoes_gol": est_finalizacoes_gol
-    }
-
 # ==========================================================
-# FILTRO DE CONFIANÇA DA IA
-# ==========================================================
-
-def calcular_confianca(minuto, gols_casa, gols_fora, escanteios, finalizacoes, finalizacoes_gol):
-    pontos = 0
-
-    # Tempo da partida
-    if 15 <= minuto <= 20:
-        pontos += 20
-    elif 21 <= minuto <= 40:
-        pontos += 15
-    elif minuto >= 80:
-        pontos += 20
-
-    # Escanteios
-    if escanteios <= 1:
-        pontos += 20
-    elif escanteios <= 3:
-        pontos += 10
-
-    # Finalizações
-    if finalizacoes >= 12:
-        pontos += 20
-    elif finalizacoes >= 8:
-        pontos += 15
-    elif finalizacoes >= 5:
-        pontos += 10
-
-    # Finalizações no gol
-    if finalizacoes_gol >= 5:
-        pontos += 20
-    elif finalizacoes_gol >= 3:
-        pontos += 15
-    elif finalizacoes_gol >= 2:
-        pontos += 10
-
-    # Placar equilibrado/apertado
-    if abs(gols_casa - gols_fora) <= 1:
-        pontos += 20
-
-    return min(pontos, 100)
-
-# ==========================================================
-# ANÁLISE E MOTOR DE ESTRATÉGIAS
+# ANALISAR ESTRATÉGIAS REAIS
 # ==========================================================
 
 def analisar_jogos():
     jogos = buscar_jogos()
 
     if not jogos:
-        logging.info("📊 Nenhum jogo ao vivo encontrado no momento.")
+        logging.info("📊 Nenhum jogo ao vivo nas ligas monitoradas no momento.")
         return
 
-    logging.info(f"🔎 {len(jogos)} jogo(s) ao vivo monitorado(s).")
+    logging.info(f"🔎 {len(jogos)} jogo(s) ao vivo sendo analisado(s)...")
 
     for jogo in jogos:
         try:
@@ -221,68 +160,23 @@ def analisar_jogos():
             minuto = jogo["minuto"]
             gols_casa = jogo["gols_casa"]
             gols_fora = jogo["gols_fora"]
-
-            stats = buscar_estatisticas(fixture_id, minuto)
-            escanteios = stats["escanteios"]
-            finalizacoes = stats["finalizacoes"]
-            finalizacoes_gol = stats["finalizacoes_gol"]
+            liga = jogo["liga"]
 
             estrategia = None
 
-            # --------------------------------------------------
-            # Estratégia 1: Escanteios 1º Tempo
-            # --------------------------------------------------
-            if (
-                15 <= minuto <= 20
-                and gols_casa == 0
-                and gols_fora == 0
-                and escanteios <= 1
-                and finalizacoes >= 6
-            ):
-                estrategia = "📐 Escanteios 1º Tempo"
+            # 🎯 1. Pressão Over 0.5 HT (0x0 entre 25' e 40' min)
+            if 25 <= minuto <= 40 and gols_casa == 0 and gols_fora == 0:
+                estrategia = "⚽ Over 0.5 HT (Gol no 1º Tempo)"
 
-            # --------------------------------------------------
-            # Estratégia 2: Over 0.5 HT
-            # --------------------------------------------------
-            elif (
-                15 <= minuto <= 40
-                and gols_casa == 0
-                and gols_fora == 0
-                and finalizacoes >= 8
-                and finalizacoes_gol >= 3
-            ):
-                estrategia = "⚽ Over 0.5 HT"
+            # 🎯 2. Reação / Virada no 2º Tempo (Casa perdendo por 1 gol após os 50' min)
+            elif minuto >= 50 and (gols_fora - gols_casa == 1):
+                estrategia = "🔥 Pressão Mandante (Buscando Empate/Virada)"
 
-            # --------------------------------------------------
-            # Estratégia 3: Reação Mandante
-            # --------------------------------------------------
-            elif (
-                minuto >= 46
-                and gols_casa == 0
-                and gols_fora == 1
-                and finalizacoes >= 10
-            ):
-                estrategia = "🔥 Reação Mandante"
-
-            # --------------------------------------------------
-            # Estratégia 4: Escanteios Finais
-            # --------------------------------------------------
-            elif (
-                minuto >= 80
-                and abs(gols_casa - gols_fora) <= 1
-            ):
-                estrategia = "🚩 Escanteios Finais"
+            # 🎯 3. Gol no Final / Over Limite (Jogo empatado ou 1 gol de dif. após 80' min)
+            elif minuto >= 80 and abs(gols_casa - gols_fora) <= 1:
+                estrategia = "🚩 Pressão Final (Over Limite / Cantos Finais)"
 
             if estrategia is None:
-                continue
-
-            # Cálculo de Confiança
-            confianca = calcular_confianca(
-                minuto, gols_casa, gols_fora, escanteios, finalizacoes, finalizacoes_gol
-            )
-
-            # Só aceita se a confiança for 70% ou superior
-            if confianca < 70:
                 continue
 
             chave = f"{fixture_id}-{estrategia}"
@@ -293,39 +187,33 @@ def analisar_jogos():
             mensagem = f"""🎯 *OPORTUNIDADE DETECTADA*
 
 🏆 *{casa} x {fora}*
+🏆 *Liga:* {liga}
 ⏱️ *Minuto:* {minuto}'
-
 ⚽ *Placar:* {gols_casa} x {gols_fora}
-🚩 *Escanteios:* {escanteios}
-🥅 *Finalizações:* {finalizacoes}
-🎯 *No Gol:* {finalizacoes_gol}
 
 📊 *Estratégia:* {estrategia}
-🤖 *Confiança da IA:* *{confianca}%*
 
-💡 *Confira a odd na sua casa de apostas!*"""
+💡 *Confira a cotação na sua casa de apostas!*"""
 
             enviar_telegram(mensagem)
-            registrar_sinal(casa, fora, estrategia, minuto, f"{gols_casa}x{gols_fora}", confianca)
-
-            logging.info(f"🚀 Alerta enviado: {casa} x {fora} [{estrategia}]")
+            registrar_sinal(casa, fora, estrategia, minuto, f"{gols_casa}x{gols_fora}")
 
         except Exception as erro:
-            logging.error(f"❌ Erro ao analisar partida {jogo.get('casa')}: {erro}")
+            logging.error(f"❌ Erro ao processar partida {jogo.get('casa')}: {erro}")
 
 # ==========================================================
-# EXECUÇÃO PRINCIPAL (LOOP 24/7)
+# LOOP PRINCIPAL
 # ==========================================================
 
 if __name__ == "__main__":
-    logging.info("🤖 Robô de Inteligência de Futebol Iniciado com Sucesso!")
-    enviar_telegram("🤖 *Robô Inteligente de Futebol Online!* Monitorando 4 estratégias ao vivo com filtro de confiança e histórico.")
+    logging.info("🤖 Robô de Sinal Iniciado!")
+    enviar_telegram("🤖 *Robô Atualizado e Online!* Monitorando partidas ao vivo com estratégias de placar e tempo.")
 
     while True:
         try:
             limpar_cache()
             analisar_jogos()
         except Exception as erro:
-            logging.error(f"❌ Erro no loop principal: {erro}")
+            logging.error(f"❌ Erro no loop: {erro}")
         
         time.sleep(INTERVALO)
