@@ -15,7 +15,7 @@ def obter_gemini_client():
     raw_key = os.getenv("GEMINI_API_KEY", "")
     if not raw_key:
         return None
-    # Remove automaticamente qualquer caractere invisível/Unicode copiado pelo celular (no início/fim)
+    # Remove automaticamente qualquer caractere invisível/Unicode copiado pelo celular
     clean_key = re.sub(r'[^\x00-\x7F]+', '', raw_key).strip()
     try:
         return genai.Client(api_key=clean_key)
@@ -67,7 +67,7 @@ def analisar_matematica_roleta(numeros):
     fam_dict = {"Cavalo 0/3/6/9": pct_0369, "Cavalo 2/5/8": pct_258, "Cavalo 1/4/7": pct_147}
     fam_quente = max(fam_dict, key=fam_dict.get)
 
-    # Montagem do Relatório
+    # Relatório Formatado
     relatorio = f"""📊 *ANÁLISE DE MESA — ROLETA IMERSIVA*
 ⏱ _Amostra processada: {total} giros_
 
@@ -100,9 +100,17 @@ def analisar_matematica_roleta(numeros):
     return relatorio
 
 async def processar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Verificação de segurança por ID do Usuário (se configurado)
+    allowed_user = os.getenv("ALLOWED_USER_ID", "").strip()
+    if allowed_user:
+        user_id = str(update.effective_user.id)
+        if user_id != allowed_user:
+            await update.message.reply_text("⛔ *Acesso negado:* Este bot é de uso privado.", parse_mode="Markdown")
+            return
+
     gemini_client = obter_gemini_client()
     if not gemini_client:
-        await update.message.reply_text("❌ Erro: A variável `GEMINI_API_KEY` não está configurada corretamente no Railway.")
+        await update.message.reply_text("❌ Erro: A variável `GEMINI_API_KEY` não está configurada no Railway.")
         return
 
     msg_status = await update.message.reply_text("🔍 *Lendo histórico da imagem...*", parse_mode="Markdown")
@@ -114,8 +122,9 @@ async def processar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         prompt = "Liste todos os números do histórico de roleta visíveis nesta imagem na sequência exata."
         
+        # Alterado para o modelo estável padrão
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-1.5-flash',
             contents=[imagem_pil, prompt]
         )
 
