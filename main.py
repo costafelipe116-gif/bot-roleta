@@ -1,8 +1,9 @@
-import os
+imporimport os
 import io
 import telebot
 from google import genai
 from PIL import Image
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
