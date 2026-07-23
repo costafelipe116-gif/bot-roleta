@@ -1,12 +1,13 @@
+import os
 import time
 import requests
 
 # ==========================================================
-# 1. SUAS CONFIGURAÇÕES
+# 1. SUAS CONFIGURAÇÕES (100% PREENCHIDAS)
 # ==========================================================
-TELEGRAM_TOKEN = "SEU_TELEGRAM_TOKEN_AQUI"
-CHAT_ID = "SEU_CHAT_ID_AQUI"
-ODDS_API_KEY = "d27dcfd9551863e11be6453b75d9b6f1"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8675857127:AAFvZAqEJhu5UJPY6v8t7Y3GTQJTxgI788g")
+CHAT_ID = os.getenv("CHAT_ID", "5912926190")
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "d27dcfd9551863e11be6453b75d9b6f1")
 
 # Filtros do bot
 ODD_MINIMA = 1.50
