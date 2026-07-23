@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import logging
@@ -12,16 +13,16 @@ from datetime import datetime
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8675857127:AAFvZAqEJhu5UJPY6v8t7Y3GTQJTxgI788g")
 CHAT_ID = os.getenv("CHAT_ID", "5912926190")
-
 FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY") or os.getenv("FOOTBALL_API_KEY", "db1b4be93bda49ab9f05fa9e20b994c1")
 
 INTERVALO = 60  # Varredura a cada 1 minuto
-ARQUIVO_HISTORICO = "historico.json"
 CACHE_MINUTOS = 3600  # Memória anti-spam de 1 hora por jogo
 
+# Configuração de logs enviando para stdout (corrige o aviso de erro falso no Railway)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    stream=sys.stdout
 )
 
 # ==========================================================
@@ -108,7 +109,7 @@ def buscar_jogos():
         return []
 
 # ==========================================================
-# ANÁLISE DE ESTRATÉGIA ÚNICA (0x0 NO 2º TEMPO)
+# ANÁLISE DE ESTRATÉGIA ÚNICA (0x0 NO 2º TEMPO - ODD 1.50 A 1.80)
 # ==========================================================
 
 def analisar_jogos():
@@ -130,8 +131,9 @@ def analisar_jogos():
             gols_fora = jogo["gols_fora"]
             liga = jogo["liga"]
 
-            # 🎯 REGRA ÚNICA: 2º Tempo (entre 50' e 75' min) e Placar 0 x 0
-            if 50 <= minuto <= 75 and gols_casa == 0 and gols_fora == 0:
+            # 🎯 REGRA ÚNICA: 2º Tempo (55' até 70' min) e Placar 0 x 0
+            # Faixa ideal para encontrar Odds entre 1.50 e 1.80 nas casas de apostas
+            if 55 <= minuto <= 70 and gols_casa == 0 and gols_fora == 0:
                 
                 chave = f"{fixture_id}-over05-2ht"
 
@@ -146,9 +148,9 @@ def analisar_jogos():
 ⚽ *Placar Atual:* 0 x 0
 
 📈 *Entrada Recomendada:* Over 0.5 Gols (Gol no jogo)
-💰 *Odd Estimada:* ~1.50 a 1.70
+💰 *Odd Estimada:* ~1.50 a 1.80
 
-💡 *O jogo está no 2º tempo com placar zerado. Excelente momento para buscar 1 gol!*"""
+💡 *Jogo zerado na janela ideal de valor! Confira na sua casa de apostas.*"""
 
                 enviar_telegram(mensagem)
                 logging.info(f"🚀 Alerta enviado: {casa} x {fora} [{minuto}']")
@@ -162,7 +164,7 @@ def analisar_jogos():
 
 if __name__ == "__main__":
     logging.info("🤖 Bot de Sinal Over 0.5 2HT Iniciado!")
-    enviar_telegram("🤖 *Bot Atualizado!* Focado exclusivamente em jogos 0x0 no 2º Tempo (Odd 1.50+).")
+    enviar_telegram("🤖 *Bot Atualizado!* Monitorando 0x0 no 2º Tempo (Janela de Odd 1.50 a 1.80).")
 
     while True:
         try:
