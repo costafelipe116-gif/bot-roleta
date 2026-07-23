@@ -1,176 +1,148 @@
 import os
-import sys
-import time
 import json
 import logging
-import requests
-from pathlib import Path
-from datetime import datetime
+import asyncio
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from google import genai
+from google.genai import types
+from PIL import Image
+import io
 
-# ==========================================================
-# CONFIGURAÇÕES E CREDENCIAIS
-# ==========================================================
+# Configuração de Logs
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8675857127:AAFvZAqEJhu5UJPY6v8t7Y3GTQJTxgI788g")
-CHAT_ID = os.getenv("CHAT_ID", "5912926190")
-FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY") or os.getenv("FOOTBALL_API_KEY", "db1b4be93bda49ab9f05fa9e20b994c1")
+# Chave da API do Gemini (obtida no Google AI Studio)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-INTERVALO = 60  # Varredura a cada 1 minuto
-CACHE_MINUTOS = 3600  # Memória anti-spam de 1 hora por jogo
+# Mapeamento de Núcleos KP
+NUCLEO_14 = [31, 9, 22, 18, 29, 14, 20, 1, 33, 16, 24]
+NUCLEO_25 = [17, 34, 25, 2, 21]
+NUCLEO_11 = [23, 30, 11, 36, 13]
 
-# Configuração de logs enviando para stdout (corrige o aviso de erro falso no Railway)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    stream=sys.stdout
-)
+# Mapeamento do Racetrack (Lado Direito vs. Lado Esquerdo)
+LADO_DIREITO = [23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35]
+LADO_ESQUERDO = [8, 30, 11, 36, 13, 27, 6, 34, 17, 25, 2, 21, 4, 19, 15, 32]
+EX_EXTREMOS = [0, 26, 3]
 
-# ==========================================================
-# MEMÓRIA ANTI-SPAM
-# ==========================================================
+def analisar_matematica_roleta(numeros):
+    total = len(numeros)
+    if total == 0:
+        return "Nenhum número foi identificado na imagem."
 
-alertas = {}
+    # 1. Mapeamento Racetrack
+    qtd_direito = sum(1 for n in numeros if n in LADO_DIREITO)
+    qtd_esquerdo = sum(1 for n in numeros if n in LADO_ESQUERDO)
+    pct_direito = round((qtd_direito / total) * 100)
+    pct_esquerdo = round((qtd_esquerdo / total) * 100)
 
-def alerta_enviado(chave):
-    agora = time.time()
-    if chave in alertas:
-        if agora - alertas[chave] < CACHE_MINUTOS:
-            return True
-    alertas[chave] = agora
-    return False
+    # 2. Raio-X KP
+    qtd_kp14 = sum(1 for n in numeros if n in NUCLEO_14)
+    qtd_kp25 = sum(1 for n in numeros if n in NUCLEO_25)
+    qtd_kp11 = sum(1 for n in numeros if n in NUCLEO_11)
 
-def limpar_cache():
-    agora = time.time()
-    remover = [chave for chave, instante in alertas.items() if agora - instante > CACHE_MINUTOS]
-    for chave in remover:
-        del alertas[chave]
+    pct_kp14 = round((qtd_kp14 / total) * 100)
+    pct_kp25 = round((qtd_kp25 / total) * 100)
+    pct_kp11 = round((qtd_kp11 / total) * 100)
 
-# ==========================================================
-# DISPARO PARA O TELEGRAM
-# ==========================================================
+    # Identificar núcleo dominante
+    kp_dict = {"Núcleo 14 (+5 vizinhos)": pct_kp14, "Núcleo 25 (+2 vizinhos)": pct_kp25, "Núcleo 11 (+2 vizinhos)": pct_kp11}
+    nucleo_dominante = max(kp_dict, key=kp_dict.get)
 
-def enviar_telegram(texto):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": texto,
-        "parse_mode": "Markdown"
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=20)
-        if r.status_code == 200:
-            logging.info("✅ Sinal enviado para o Telegram!")
-        else:
-            logging.error(f"❌ Erro Telegram ({r.status_code}): {r.text}")
-    except Exception as erro:
-        logging.error(f"❌ Exceção Telegram: {erro}")
+    # 3. Famílias de Cavalos (Terminais)
+    cav_258 = sum(1 for n in numeros if str(n)[-1] in ['2', '5', '8'])
+    cav_147 = sum(1 for n in numeros if str(n)[-1] in ['1', '4', '7'])
+    cav_0369 = sum(1 for n in numeros if str(n)[-1] in ['0', '3', '6', '9'])
 
-# ==========================================================
-# BUSCAR JOGOS AO VIVO
-# ==========================================================
+    pct_258 = round((cav_258 / total) * 100)
+    pct_147 = round((cav_147 / total) * 100)
+    pct_0369 = round((cav_0369 / total) * 100)
 
-def buscar_jogos():
-    url = "https://api.football-data.org/v4/matches"
-    headers = {"X-Auth-Token": FOOTBALL_DATA_KEY}
-    params = {"status": "IN_PLAY"}
+    # Cruzamento de convergência
+    fam_dict = {"Cavalo 0/3/6/9": pct_0369, "Cavalo 2/5/8": pct_258, "Cavalo 1/4/7": pct_147}
+    fam_quente = max(fam_dict, key=fam_dict.get)
 
-    try:
-        resposta = requests.get(url, headers=headers, params=params, timeout=20)
-        if resposta.status_code != 200:
-            logging.error(f"⚠️ API Error ({resposta.status_code}): {resposta.text}")
-            return []
+    # Montagem do Relatório
+    relatorio = f"""📊 *ANÁLISE DE MESA — ROLETA IMERSIVA*
+⏱ _Amostra processada: {total} giros_
 
-        partidas = resposta.json().get("matches", [])
-        jogos = []
+---
 
-        for jogo in partidas:
-            minuto = jogo.get("minute") or 0
-            casa = jogo.get("homeTeam", {}).get("name", "Casa")
-            fora = jogo.get("awayTeam", {}).get("name", "Fora")
-            
-            score = jogo.get("score", {}).get("fullTime", {})
-            gols_casa = score.get("home") if score.get("home") is not None else 0
-            gols_fora = score.get("away") if score.get("away") is not None else 0
+### 1. Mapeamento Geral do Racetrack
+* **Lado Direito:** **{pct_direito}%** ({qtd_direito}x)
+* **Lado Esquerdo:** **{pct_esquerdo}%** ({qtd_esquerdo}x)
 
-            jogos.append({
-                "id": jogo.get("id"),
-                "casa": casa,
-                "fora": fora,
-                "minuto": minuto,
-                "gols_casa": gols_casa,
-                "gols_fora": gols_fora,
-                "liga": jogo.get("competition", {}).get("name", "Liga")
-            })
+### 2. Raio-X da Jogada KP
+* **Núcleo 14 (+5 vizinhos):** {qtd_kp14} saídas (**{pct_kp14}%**)
+* **Núcleo 25 (+2 vizinhos):** {qtd_kp25} saídas (**{pct_kp25}%**)
+* **Núcleo 11 (+2 vizinhos):** {qtd_kp11} saídas (**{pct_kp11}%**)
+> 🔥 **Dominância:** {nucleo_dominante} em destaque.
 
-        return jogos
+### 3. Famílias de Cavalos (Terminais)
+* **Cavalo 0/3/6/9:** **{pct_0369}%**
+* **Cavalo 2/5/8:** **{pct_258}%**
+* **Cavalo 1/4/7:** **{pct_147}%**
+> 🧬 **Família Quente:** {fam_quente}
 
-    except Exception as erro:
-        logging.error(f"❌ Erro na busca de partidas: {erro}")
-        return []
+### 4. Direcionamento e Jogada Sugerida
+🎯 **ENTRADA RECOMENDADA:**
+* **Aposta Base:** **{nucleo_dominante}** no Racetrack
+* **Terminais em Foco:** Cruzar com as saídas da família **{fam_quente}**
+* **Probabilidade Estimada:** **{max(pct_direito, pct_esquerdo) + max(pct_kp14, pct_kp25, pct_kp11)}%** de convergência no setor
 
-# ==========================================================
-# ANÁLISE DE ESTRATÉGIA ÚNICA (0x0 NO 2º TEMPO - ODD 1.50 A 1.80)
-# ==========================================================
+---
+⚡ _Aguardando a próxima foto da mesa..._"""
 
-def analisar_jogos():
-    jogos = buscar_jogos()
+    return relatorio
 
-    if not jogos:
-        logging.info("📊 Varrendo partidas ao vivo... (Nenhum jogo no momento)")
+async def processar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not gemini_client:
+        await update.message.reply_text("❌ Erro: A variável `GEMINI_API_KEY` não está configurada no Railway.")
         return
 
-    logging.info(f"🔎 Analisando {len(jogos)} jogo(s) ao vivo...")
+    msg_status = await update.message.reply_text("🔍 *Lendo histórico da imagem...*", parse_mode="Markdown")
 
-    for jogo in jogos:
-        try:
-            fixture_id = jogo["id"]
-            casa = jogo["casa"]
-            fora = jogo["fora"]
-            minuto = jogo["minuto"]
-            gols_casa = jogo["gols_casa"]
-            gols_fora = jogo["gols_fora"]
-            liga = jogo["liga"]
+    try:
+        # Baixa a foto enviada pelo usuário
+        foto = await update.message.photo[-1].get_file()
+        foto_bytes = await foto.download_as_bytearray()
+        imagem_pil = Image.open(io.BytesIO(foto_bytes))
 
-            # 🎯 REGRA ÚNICA: 2º Tempo (55' até 70' min) e Placar 0 x 0
-            # Faixa ideal para encontrar Odds entre 1.50 e 1.80 nas casas de apostas
-            if 55 <= minuto <= 70 and gols_casa == 0 and gols_fora == 0:
-                
-                chave = f"{fixture_id}-over05-2ht"
+        # Pede ao Gemini apenas a extração dos números em formato JSON puro
+        prompt = "Leia todos os números do histórico da roleta na imagem. Retorne APENAS um array JSON com os números inteiros na ordem em que aparecem (do mais recente para o mais antigo). Exemplo: [32, 29, 20, 36, 4]. Não escreva mais nada além do JSON."
+        
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[imagem_pil, prompt]
+        )
 
-                if alerta_enviado(chave):
-                    continue
+        texto_resposta = response.text.strip().replace("```json", "").replace("```", "")
+        numeros = json.loads(texto_resposta)
 
-                mensagem = f"""🔥 *SINAL DETECTADO: OVER 0.5 GOLS*
+        # Processa a matemática exata em Python
+        relatorio_final = analisar_matematica_roleta(numeros)
 
-🏆 *{casa} x {fora}*
-🏆 *Liga:* {liga}
-⏱️ *Minuto:* {minuto}' do 2º Tempo
-⚽ *Placar Atual:* 0 x 0
+        await msg_status.delete()
+        await update.message.reply_text(relatorio_final, parse_mode="Markdown")
 
-📈 *Entrada Recomendada:* Over 0.5 Gols (Gol no jogo)
-💰 *Odd Estimada:* ~1.50 a 1.80
+    except Exception as e:
+        await msg_status.delete()
+        await update.message.reply_text(f"⚠️ Erro ao processar a imagem. Certifique-se de que o print está bem nítido.\n\nDetalhes: {e}")
 
-💡 *Jogo zerado na janela ideal de valor! Confira na sua casa de apostas.*"""
+def main():
+    token = os.getenv("TELEGRAM_TOKEN")
+    if not token:
+        print("Erro: TELEGRAM_TOKEN não encontrado!")
+        return
 
-                enviar_telegram(mensagem)
-                logging.info(f"🚀 Alerta enviado: {casa} x {fora} [{minuto}']")
+    app = Application.builder().token(token).build()
+    
+    # Adiciona o manipulador para fotos
+    app.add_handler(MessageHandler(filters.PHOTO, processar_foto))
 
-        except Exception as erro:
-            logging.error(f"❌ Erro ao analisar partida {jogo.get('casa')}: {erro}")
-
-# ==========================================================
-# LOOP PRINCIPAL
-# ==========================================================
+    print("⚡ Robô da Roleta rodando com sucesso!")
+    app.run_polling()
 
 if __name__ == "__main__":
-    logging.info("🤖 Bot de Sinal Over 0.5 2HT Iniciado!")
-    enviar_telegram("🤖 *Bot Atualizado!* Monitorando 0x0 no 2º Tempo (Janela de Odd 1.50 a 1.80).")
-
-    while True:
-        try:
-            limpar_cache()
-            analisar_jogos()
-        except Exception as erro:
-            logging.error(f"❌ Erro no loop: {erro}")
-        
-        time.sleep(INTERVALO)
+    main()
