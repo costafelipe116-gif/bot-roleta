@@ -11,9 +11,17 @@ import io
 # Configuração de Logs
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# Chave da API do Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+def obter_gemini_client():
+    raw_key = os.getenv("GEMINI_API_KEY", "")
+    if not raw_key:
+        return None
+    # Remove automaticamente qualquer caractere invisível/Unicode copiado pelo celular (no início/fim)
+    clean_key = re.sub(r'[^\x00-\x7F]+', '', raw_key).strip()
+    try:
+        return genai.Client(api_key=clean_key)
+    except Exception as e:
+        logging.error(f"Erro ao inicializar Gemini Client: {e}")
+        return None
 
 # Mapeamento de Núcleos KP
 NUCLEO_14 = [31, 9, 22, 18, 29, 14, 20, 1, 33, 16, 24]
@@ -27,7 +35,7 @@ LADO_ESQUERDO = [8, 30, 11, 36, 13, 27, 6, 34, 17, 25, 2, 21, 4, 19, 15, 32]
 def analisar_matematica_roleta(numeros):
     total = len(numeros)
     if total == 0:
-        return "⚠️ Nenhum número válido foi encontrado na imagem. Tente enviar um print mais aproximado do histórico."
+        return "⚠️ Nenhum número válido foi encontrado na imagem. Tente enviar um print mais aproximado do histórico da mesa."
 
     # 1. Mapeamento Racetrack
     qtd_direito = sum(1 for n in numeros if n in LADO_DIREITO)
@@ -92,14 +100,14 @@ def analisar_matematica_roleta(numeros):
     return relatorio
 
 async def processar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    gemini_client = obter_gemini_client()
     if not gemini_client:
-        await update.message.reply_text("❌ Erro: A variável `GEMINI_API_KEY` não está configurada no Railway.")
+        await update.message.reply_text("❌ Erro: A variável `GEMINI_API_KEY` não está configurada corretamente no Railway.")
         return
 
     msg_status = await update.message.reply_text("🔍 *Lendo histórico da imagem...*", parse_mode="Markdown")
 
     try:
-        # Baixa a foto enviada
         foto = await update.message.photo[-1].get_file()
         foto_bytes = await foto.download_as_bytearray()
         imagem_pil = Image.open(io.BytesIO(foto_bytes))
@@ -111,14 +119,12 @@ async def processar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             contents=[imagem_pil, prompt]
         )
 
-        # Remove caracteres invisíveis/unicodes ocultos
-        texto_limpo = re.sub(r'[\u200b\u2060\ufeff]', '', response.text)
+        texto_resposta = response.text if response and response.text else ""
+        texto_limpo = re.sub(r'[^\x00-\x7F]+', ' ', texto_resposta)
         
-        # Extrai apenas os números inteiros válidos de 0 a 36 da resposta
         encontrados = re.findall(r'\b\d+\b', texto_limpo)
         numeros = [int(n) for n in encontrados if 0 <= int(n) <= 36]
 
-        # Processa os cálculos matemáticos
         relatorio_final = analisar_matematica_roleta(numeros)
 
         await msg_status.delete()
@@ -126,16 +132,19 @@ async def processar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await msg_status.delete()
-        erro_str = re.sub(r'[\u200b\u2060\ufeff]', '', str(e))
-        await update.message.reply_text(f"⚠️ Erro ao processar a imagem. Certifique-se de que o print está bem nítido.\n\nDetalhes: {erro_str}")
+        erro_bruto = str(e)
+        erro_limpo = re.sub(r'[^\x00-\x7F]+', '', erro_bruto)
+        await update.message.reply_text(f"⚠️ Erro ao processar a imagem. Certifique-se de que o print está bem nítido.\n\nDetalhes: {erro_limpo}")
 
 def main():
-    token = os.getenv("TELEGRAM_TOKEN")
-    if not token:
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    clean_token = re.sub(r'[^\x00-\x7F]+', '', token).strip()
+    
+    if not clean_token:
         print("Erro: TELEGRAM_TOKEN não encontrado!")
         return
 
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(clean_token).build()
     app.add_handler(MessageHandler(filters.PHOTO, processar_foto))
 
     print("⚡ Robô da Roleta rodando com sucesso!")
