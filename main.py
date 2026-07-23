@@ -2,11 +2,11 @@ import time
 import requests
 
 # ==========================================================
-# 1. SUAS CONFIGURAÇÕES (PREENCHA SEU TELEGRAM E CHAT ID)
+# 1. SUAS CONFIGURAÇÕES
 # ==========================================================
 TELEGRAM_TOKEN = "SEU_TELEGRAM_TOKEN_AQUI"
 CHAT_ID = "SEU_CHAT_ID_AQUI"
-ODDS_API_KEY = "Bf0dd4b2d85bc89123401a03b7144bad"
+ODDS_API_KEY = "d27dcfd9551863e11be6453b75d9b6f1"
 
 # Filtros do bot
 ODD_MINIMA = 1.50
@@ -43,12 +43,11 @@ def enviar_alerta_telegram(mensagem):
 def verificar_jogos_e_odds():
     print("🔍 Analisando odds no mercado de futebol...")
     
-    # Endpoint da The Odds API para jogos de futebol
-    url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
+    url = "https://api.the-odds-api.com/v4/sports/upcoming/odds/"
     params = {
         "apiKey": ODDS_API_KEY,
-        "regions": "eu",           # Região
-        "markets": "h2h,totals",   # Mercados: Vencedor e Gols
+        "regions": "eu,us",         # Regiões das casas de apostas
+        "markets": "h2h,totals",    # Mercados: Vencedor e Gols
         "oddsFormat": "decimal"
     }
 
@@ -56,12 +55,16 @@ def verificar_jogos_e_odds():
         resposta = requests.get(url, params=params)
         
         if resposta.status_code != 200:
-            print(f"⚠️ Erro ao consultar a API de Odds. Código: {resposta.status_code}")
+            print(f"⚠️ Erro na API de Odds (Código {resposta.status_code}): {resposta.text}")
             return
 
         jogos = resposta.json()
 
         for jogo in jogos:
+            sport_key = jogo.get("sport_key", "")
+            if "soccer" not in sport_key:
+                continue
+
             id_jogo = jogo.get("id")
             time_casa = jogo.get("home_team", "Time Casa")
             time_fora = jogo.get("away_team", "Time Fora")
@@ -75,13 +78,11 @@ def verificar_jogos_e_odds():
                         nome_opcao = aposta.get("name")
                         odd_atual = aposta.get("price", 0)
 
-                        # FILTRO: Verifica se a Odd está no seu intervalo (1.50 a 2.00)
+                        # FILTRO: Verifica se a Odd está no intervalo (1.50 a 2.00)
                         if ODD_MINIMA <= odd_atual <= ODD_MAXIMA:
-                            # Identificador único para evitar avisos duplicados
                             id_alerta = f"{id_jogo}_{nome_opcao}_{odd_atual}"
 
                             if id_alerta not in jogos_alertados:
-                                # Monta o texto que chega no seu Telegram
                                 mensagem = (
                                     "🚨 **ALERTA DE ENTRADA DETECTADO!** 🚨\n\n"
                                     f"⚽ **Jogo:** {time_casa} x {time_fora}\n"
